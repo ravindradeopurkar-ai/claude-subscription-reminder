@@ -5,8 +5,13 @@ import { loadConfig } from './config';
 export function getDaysLeft(renewalDate: string): number {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const renewal = new Date(renewalDate);
-  renewal.setHours(0, 0, 0, 0);
+
+  // Parse the date string explicitly as local midnight to avoid the UTC-offset
+  // issue: `new Date('YYYY-MM-DD')` is treated as UTC midnight, which can be
+  // off by one day in non-UTC timezones.
+  const [y, m, d] = renewalDate.split('-').map(Number);
+  const renewal = new Date(y, m - 1, d); // local midnight
+
   const diffMs = renewal.getTime() - today.getTime();
   return Math.ceil(diffMs / (1000 * 60 * 60 * 24));
 }

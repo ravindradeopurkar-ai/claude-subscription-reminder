@@ -8,7 +8,9 @@
     "server": "tsx server/index.ts",
     "preview": "vite preview",
     "review": "tsx scripts/code-review.ts",
-    "review:save": "tsx scripts/code-review.ts --save"
+    "review:save": "tsx scripts/code-review.ts --save",
+    "typecheck": "tsc --noEmit",
+    "typecheck:server": "tsc -p tsconfig.server.json --noEmit"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.101",

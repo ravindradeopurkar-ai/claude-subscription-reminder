@@ -1,4 +1,4 @@
-import { useState, useEffect, FormEvent } from 'react';
+import { useState, useEffect, useCallback, useRef, FormEvent } from 'react';
 
 const API = 'http://localhost:3001';
 
@@ -25,6 +25,7 @@ function formatDate(iso: string): string {
 
 export default function App() {
   const [status, setStatus] = useState<Status | null>(null);
+  const [loading, setLoading] = useState(true);
   const [apiKey, setApiKey] = useState('');
   const [renewalDate, setRenewalDate] = useState('');
   const [saving, setSaving] = useState(false);
@@ -32,27 +33,41 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [toast, setToast] = useState<{ text: string; ok: boolean } | null>(null);
 
-  function showToast(text: string, ok: boolean) {
-    setToast({ text, ok });
-    setTimeout(() => setToast(null), 4000);
-  }
+  // Keep a stable ref to the toast timer so we can cancel it on rapid re-triggers
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  async function fetchStatus() {
+  const showToast = useCallback((text: string, ok: boolean) => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToast({ text, ok });
+    toastTimerRef.current = setTimeout(() => setToast(null), 4000);
+  }, []); // setToast and toastTimerRef are stable — no deps needed
+
+  const fetchStatus = useCallback(async (signal?: AbortSignal) => {
     try {
-      const res = await fetch(`${API}/api/status`);
+      const res = await fetch(`${API}/api/status`, { signal });
       const data: Status = await res.json();
       setStatus(data);
       if (!data.configured) setShowSettings(true);
-    } catch {
+    } catch (err) {
+      // Ignore intentional cancellations (component unmounting)
+      if (err instanceof Error && err.name === 'AbortError') return;
       showToast('Cannot reach server. Make sure `npm run dev` is running.', false);
+    } finally {
+      setLoading(false);
     }
-  }
+  }, [showToast]);
 
   useEffect(() => {
-    fetchStatus();
-    const id = setInterval(fetchStatus, 60_000);
-    return () => clearInterval(id);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    const controller = new AbortController();
+    fetchStatus(controller.signal);
+    const id = setInterval(() => fetchStatus(), 60_000);
+
+    return () => {
+      controller.abort();
+      clearInterval(id);
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    };
+  }, [fetchStatus]);
 
   async function handleSave(e: FormEvent) {
     e.preventDefault();
@@ -106,13 +121,20 @@ export default function App() {
       </header>
 
       {toast && (
-        <div className={`toast ${toast.ok ? 'ok' : 'err'}`}>
+        <div className={`toast ${toast.ok ? 'ok' : 'err'}`} role="status" aria-live="polite">
           <span>{toast.text}</span>
-          <button onClick={() => setToast(null)}>×</button>
+          <button onClick={() => setToast(null)} aria-label="Dismiss notification">×</button>
         </div>
       )}
 
-      {status?.configured && days !== undefined && (
+      {/* Show skeleton while the first fetch is in-flight */}
+      {loading && (
+        <div className="card center">
+          <p className="muted">Connecting to server…</p>
+        </div>
+      )}
+
+      {!loading && status?.configured && days !== undefined && (
         <div className="card center">
           <div className="big-num" style={{ color }}>
             {Math.abs(days)}
@@ -145,13 +167,13 @@ export default function App() {
         </div>
       )}
 
-      {!status?.configured && (
+      {!loading && !status?.configured && (
         <div className="card center">
           <p className="muted">Configure your renewal date and API key to get started.</p>
         </div>
       )}
 
-      {(showSettings || !status?.configured) && (
+      {(showSettings || (!loading && !status?.configured)) && (
         <div className="card">
           <h2>Settings</h2>
           <form onSubmit={handleSave}>
