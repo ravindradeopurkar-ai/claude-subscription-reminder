@@ -1,0 +1,198 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 3 · Review PR
+# ─────────────────────────────────────────────────────────────────────────────
+# Trigger: pull_request opened or synchronize (only when plan.md changes)
+# Action : Claude reviews plan.md vs requirement.md
+#          → posts a detailed review comment on the PR
+#          → adds label  "review-approved"      if score ≥ 80
+#          → adds label  "review-changes-needed" if score < 80
+#
+# Required secrets: ANTHROPIC_API_KEY, PAT
+#   Labels must be created by PAT so that Stage 4 pull_request:labeled fires.
+# ─────────────────────────────────────────────────────────────────────────────
+name: "3 · Review PR"
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    paths: ["plan.md"]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      # ── Call Claude to review the plan ────────────────────────────────────
+      - name: Review plan.md via Claude
+        id: review
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python3 << 'PYEOF'
+          import json, urllib.request, os, sys, re
+
+          def read_file(path, default=""):
+              try:
+                  with open(path) as f:
+                      return f.read().strip()
+              except FileNotFoundError:
+                  return default
+
+          plan        = read_file("plan.md")
+          requirement = read_file("requirement.md")
+
+          if not plan:
+              print("ERROR: plan.md is missing or empty")
+              sys.exit(1)
+
+          prompt = f"""You are a senior software engineer reviewing an implementation plan \
+(plan.md) against the original requirement.
+
+Evaluate on four dimensions:
+1. **Completeness**  – Does the plan fully address all aspects of the requirement?
+2. **Technical soundness** – Are architecture choices and implementation steps correct?
+3. **Clarity**       – Is the plan actionable and unambiguous for a developer to follow?
+4. **Risk coverage** – Are significant risks identified with practical mitigations?
+
+Scoring rules:
+- Score 0–100. Score ≥ 80 → verdict APPROVED. Score < 80 → verdict REQUEST_CHANGES.
+
+Respond with ONLY valid JSON in this exact schema (no markdown fences, no extra text):
+{{
+  "verdict": "APPROVED",
+  "score": 85,
+  "summary": "One-sentence overall assessment.",
+  "strengths": ["strength1", "strength2"],
+  "issues": ["issue1"],
+  "suggestions": ["suggestion1"]
+}}
+
+REQUIREMENT:
+{requirement}
+
+PLAN:
+{plan}"""
+
+          payload = {
+              "model": "claude-3-5-haiku-20241022",
+              "max_tokens": 1024,
+              "messages": [{"role": "user", "content": prompt}],
+          }
+
+          req = urllib.request.Request(
+              "https://api.anthropic.com/v1/messages",
+              data=json.dumps(payload).encode(),
+              headers={
+                  "x-api-key": os.environ["ANTHROPIC_API_KEY"],
+                  "anthropic-version": "2023-06-01",
+                  "content-type": "application/json",
+              },
+          )
+
+          try:
+              with urllib.request.urlopen(req) as resp:
+                  result = json.loads(resp.read())
+          except urllib.error.HTTPError as e:
+              print(f"API error {e.code}: {e.read().decode()}")
+              sys.exit(1)
+
+          raw = result["content"][0]["text"].strip()
+
+          # Parse JSON — fallback: extract first {...} block
+          try:
+              review = json.loads(raw)
+          except json.JSONDecodeError:
+              match = re.search(r'\{.*\}', raw, re.DOTALL)
+              if match:
+                  review = json.loads(match.group())
+              else:
+                  print(f"ERROR: Could not parse JSON:\n{raw}")
+                  sys.exit(1)
+
+          verdict     = review.get("verdict", "REQUEST_CHANGES")
+          score       = int(review.get("score", 0))
+          summary     = review.get("summary", "")
+          strengths   = review.get("strengths", [])
+          issues      = review.get("issues", [])
+          suggestions = review.get("suggestions", [])
+
+          # ── Build the PR comment ─────────────────────────────────────────
+          icon  = "✅" if verdict == "APPROVED" else "⚠️"
+          badge = "🟢 APPROVED" if verdict == "APPROVED" else "🔴 CHANGES REQUESTED"
+
+          def md_list(items):
+              return "\n".join(f"- {i}" for i in items) if items else "_None_"
+
+          score_bar = "█" * (score // 10) + "░" * (10 - score // 10)
+
+          comment = f"""{icon} **Claude Plan Review**
+
+| | |
+|---|---|
+| **Verdict** | {badge} |
+| **Score** | `{score}/100`  {score_bar} |
+| **Summary** | {summary} |
+
+### 💪 Strengths
+{md_list(strengths)}
+
+### ❗ Issues
+{md_list(issues)}
+
+### 💡 Suggestions
+{md_list(suggestions)}
+
+---
+<sub>🤖 Automated review by Claude AI · model: {payload['model']} · Stage 3 of pipeline</sub>"""
+
+          with open("review_comment.md", "w") as f:
+              f.write(comment)
+
+          # Write outputs for next step
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"verdict={verdict}\n")
+              out.write(f"score={score}\n")
+
+          print(f"Review complete → {verdict} ({score}/100)")
+          PYEOF
+
+      # ── Post the review comment ───────────────────────────────────────────
+      - name: Post review comment on PR
+        env:
+          GH_TOKEN: ${{ secrets.PAT }}
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --body-file review_comment.md
+          echo "✅ Review comment posted"
+
+      # ── Apply label (PAT required so Stage 4 pull_request:labeled fires) ─
+      - name: Label PR based on verdict
+        env:
+          GH_TOKEN: ${{ secrets.PAT }}
+        run: |
+          VERDICT="${{ steps.review.outputs.verdict }}"
+          PR="${{ github.event.pull_request.number }}"
+
+          if [ "$VERDICT" = "APPROVED" ]; then
+            gh label create "review-approved" \
+              --color "0e8a16" \
+              --description "Plan approved by Claude AI (score ≥ 80)" 2>/dev/null || true
+            gh pr edit "$PR" --add-label "review-approved"
+            echo "✅ Labeled: review-approved → Stage 4 will auto-merge"
+          else
+            gh label create "review-changes-needed" \
+              --color "b60205" \
+              --description "Changes requested by Claude AI (score < 80)" 2>/dev/null || true
+            gh pr edit "$PR" --add-label "review-changes-needed"
+            echo "⚠️ Labeled: review-changes-needed → fix plan.md and push again"
+          fi

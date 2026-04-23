@@ -1,0 +1,123 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 1 · Generate Plan
+# ─────────────────────────────────────────────────────────────────────────────
+# Trigger: push ANY branch (except master) that adds / edits requirement.md
+# Action : calls Claude API → writes plan.md → commits it back to the branch
+#
+# Required secret: ANTHROPIC_API_KEY
+# ─────────────────────────────────────────────────────────────────────────────
+name: "1 · Generate Plan"
+
+on:
+  push:
+    branches-ignore: [master, main]
+    paths: ["requirement.md"]
+
+permissions:
+  contents: write   # needed to push plan.md back to the branch
+
+jobs:
+  generate-plan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ── Generate plan.md via Claude ────────────────────────────────────────
+      - name: Generate plan.md via Claude API
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python3 << 'PYEOF'
+          import json, urllib.request, os, sys
+
+          with open("requirement.md", "r") as f:
+              requirement = f.read().strip()
+
+          if not requirement:
+              print("ERROR: requirement.md is empty")
+              sys.exit(1)
+
+          prompt = f"""You are a senior software architect. Read the following requirement \
+and produce a detailed, actionable implementation plan as a well-structured Markdown document.
+
+Include ALL of the following sections:
+
+# Implementation Plan
+
+## 1. Overview
+Concise description of what will be built and why.
+
+## 2. Technical Architecture
+Technologies, patterns, system design decisions, and data flow.
+
+## 3. Implementation Steps
+Numbered, granular tasks a developer will follow to implement the feature.
+
+## 4. File & Folder Structure
+Show the expected directory tree (use a code block with tree notation).
+
+## 5. Dependencies
+List all new packages/libraries with brief justification.
+
+## 6. Testing Strategy
+Unit tests, integration tests, and manual test cases.
+
+## 7. Risks & Mitigations
+Known risks and concrete ways to address them.
+
+---
+REQUIREMENT:
+{requirement}
+---
+
+Output ONLY the Markdown content for plan.md. No preamble or commentary outside the document."""
+
+          payload = {
+              "model": "claude-opus-4-5",
+              "max_tokens": 4096,
+              "messages": [{"role": "user", "content": prompt}],
+          }
+
+          req = urllib.request.Request(
+              "https://api.anthropic.com/v1/messages",
+              data=json.dumps(payload).encode(),
+              headers={
+                  "x-api-key": os.environ["ANTHROPIC_API_KEY"],
+                  "anthropic-version": "2023-06-01",
+                  "content-type": "application/json",
+              },
+          )
+
+          try:
+              with urllib.request.urlopen(req) as resp:
+                  result = json.loads(resp.read())
+          except urllib.error.HTTPError as e:
+              print(f"API error {e.code}: {e.read().decode()}")
+              sys.exit(1)
+
+          plan_text = result["content"][0]["text"]
+          with open("plan.md", "w") as f:
+              f.write(plan_text)
+
+          print("✅ plan.md generated successfully")
+          print("--- Preview (first 400 chars) ---")
+          print(plan_text[:400])
+          PYEOF
+
+      # ── Commit plan.md back to the feature branch ─────────────────────────
+      - name: Commit plan.md
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add plan.md
+          if git diff --cached --quiet; then
+            echo "plan.md unchanged — nothing to commit"
+          else
+            git commit -m "🤖 [auto] Generate plan.md from requirement.md"
+            git push
+            echo "✅ plan.md committed and pushed"
+          fi
