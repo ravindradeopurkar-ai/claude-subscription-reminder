@@ -55,8 +55,7 @@ jobs:
               print("ERROR: plan.md is missing or empty")
               sys.exit(1)
 
-          prompt = f"""You are a senior software engineer reviewing an implementation plan \
-(plan.md) against the original requirement.
+          prompt = f"""You are a senior software engineer reviewing an implementation plan (plan.md) against the original requirement.
 
 Evaluate on four dimensions:
 1. **Completeness**  – Does the plan fully address all aspects of the requirement?

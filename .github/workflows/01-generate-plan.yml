@@ -41,8 +41,7 @@ jobs:
               print("ERROR: requirement.md is empty")
               sys.exit(1)
 
-          prompt = f"""You are a senior software architect. Read the following requirement \
-and produce a detailed, actionable implementation plan as a well-structured Markdown document.
+          prompt = f"""You are a senior software architect. Read the following requirement and produce a detailed, actionable implementation plan as a well-structured Markdown document.
 
 Include ALL of the following sections:
 
