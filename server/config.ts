@@ -9,19 +9,33 @@ export interface AppConfig {
 }
 
 export function loadConfig(): AppConfig {
+  // Environment variables take precedence over the config file
+  const envConfig: AppConfig = {
+    ...(process.env.ANTHROPIC_API_KEY ? { apiKey: process.env.ANTHROPIC_API_KEY } : {}),
+    ...(process.env.RENEWAL_DATE ? { renewalDate: process.env.RENEWAL_DATE } : {}),
+  };
+
   try {
     if (fs.existsSync(CONFIG_FILE)) {
-      return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8')) as AppConfig;
+      const fileConfig = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8')) as AppConfig;
+      // env vars win over file values
+      return { ...fileConfig, ...envConfig };
     }
   } catch {
     // ignore read errors
   }
-  return {};
+
+  return envConfig;
 }
 
 export function saveConfig(updates: Partial<AppConfig>): AppConfig {
   const existing = loadConfig();
   const updated = { ...existing, ...updates };
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(updated, null, 2));
+
+  // Atomic write: write to a temp file then rename to avoid partial-write corruption
+  const tmp = CONFIG_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(updated, null, 2));
+  fs.renameSync(tmp, CONFIG_FILE);
+
   return updated;
 }

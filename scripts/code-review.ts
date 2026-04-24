@@ -87,6 +87,7 @@ async function runCodeReview(): Promise<void> {
       cwd: PROJECT_ROOT,
       allowedTools: ['Read', 'Glob', 'Grep'],
       systemPrompt: SYSTEM_PROMPT,
+      model: 'claude-opus-4-6',
       maxTurns: 40,
     },
   })) {

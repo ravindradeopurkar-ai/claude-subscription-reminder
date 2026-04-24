@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { NextFunction, Request, Response } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import Anthropic from '@anthropic-ai/sdk';
@@ -8,10 +8,10 @@ import { startScheduler, sendReminder, getDaysLeft } from './scheduler';
 dotenv.config();
 
 const app = express();
-app.use(cors({ origin: 'http://localhost:5173' }));
-app.use(express.json());
+app.use(cors({ origin: process.env.CORS_ORIGIN ?? 'http://localhost:5173' }));
+app.use(express.json({ limit: '16kb' }));
 
-const PORT = 3001;
+const PORT = Number(process.env.PORT) || 3001;
 
 // ── GET /api/status ──────────────────────────────────────────────────────────
 app.get('/api/status', (_req, res) => {
@@ -33,10 +33,21 @@ app.get('/api/status', (_req, res) => {
 
 // ── POST /api/config ─────────────────────────────────────────────────────────
 app.post('/api/config', async (req, res) => {
-  const { renewalDate, apiKey } = req.body as { renewalDate?: string; apiKey?: string };
+  // Runtime type validation — don't trust the TypeScript cast alone
+  const { renewalDate, apiKey } = req.body ?? {};
 
-  if (!renewalDate || !apiKey) {
+  if (typeof renewalDate !== 'string' || typeof apiKey !== 'string') {
+    return res.status(400).json({ error: 'renewalDate and apiKey must be strings' });
+  }
+
+  if (!renewalDate.trim() || !apiKey.trim()) {
     return res.status(400).json({ error: 'renewalDate and apiKey are required' });
+  }
+
+  // Validate that renewalDate is a real calendar date
+  const parsed = Date.parse(renewalDate);
+  if (isNaN(parsed)) {
+    return res.status(400).json({ error: 'renewalDate must be a valid date (YYYY-MM-DD)' });
   }
 
   // Verify the API key works with a minimal call
@@ -64,6 +75,17 @@ app.post('/api/remind-now', (_req, res) => {
   }
   sendReminder(config.renewalDate);
   return res.json({ success: true });
+});
+
+// ── Global error-handling middleware ─────────────────────────────────────────
+app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  console.error('[Unhandled error]', err);
+  res.status(500).json({ error: 'Internal server error' });
+});
+
+// ── Catch unhandled promise rejections so the process doesn't silently die ───
+process.on('unhandledRejection', (reason) => {
+  console.error('[Unhandled rejection]', reason);
 });
 
 // ── Start ────────────────────────────────────────────────────────────────────

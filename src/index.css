@@ -127,7 +127,10 @@ input {
   font-size: 0.85rem;
   transition: border-color 0.15s;
 }
-input:focus { outline: none; border-color: #7c3aed; }
+input:focus { border-color: #7c3aed; }
+
+/* Preserve visible focus ring for keyboard users (WCAG 2.1 AA) */
+:focus-visible { outline: 2px solid #7c3aed; outline-offset: 2px; }
 
 small {
   font-size: 0.72rem;
